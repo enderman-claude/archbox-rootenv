@@ -17,9 +17,12 @@
  *   - File ownership is not handled here. That is faked's job.
  */
 #define _GNU_SOURCE
+#include <dlfcn.h>
 #include <errno.h>
 #include <grp.h>
+#include <stdarg.h>
 #include <stddef.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -188,4 +191,71 @@ int getgroups(int size, gid_t list[]) {
     }
     for (int i = 0; i < cred.ngroups; i++) list[i] = cred.groups[i];
     return cred.ngroups;
+}
+
+/* ---- raw syscall() interception (v2) ----------------------------------------------------
+ * Some libc paths call syscall(SYS_xxx, ...) directly instead of the named wrapper, so the
+ * wrappers above never see the call. Credential numbers are answered here, from the same
+ * state. Everything else is passed to the real syscall() found with dlsym(RTLD_NEXT). */
+
+int setreuid(uid_t r, uid_t e) {
+    cred_init();
+    if (!privileged()) {
+        if ((r != (uid_t)-1 && !uid_allowed(r)) || (e != (uid_t)-1 && !uid_allowed(e))) {
+            errno = EPERM;
+            return -1;
+        }
+    }
+    if (r != (uid_t)-1) cred.ruid = r;
+    if (e != (uid_t)-1) cred.euid = e;
+    return 0;
+}
+
+int setregid(gid_t r, gid_t e) {
+    cred_init();
+    if (!privileged()) {
+        if ((r != (gid_t)-1 && !gid_allowed(r)) || (e != (gid_t)-1 && !gid_allowed(e))) {
+            errno = EPERM;
+            return -1;
+        }
+    }
+    if (r != (gid_t)-1) cred.rgid = r;
+    if (e != (gid_t)-1) cred.egid = e;
+    return 0;
+}
+
+typedef long (*real_syscall_fn)(long, ...);
+
+static real_syscall_fn real_syscall(void) {
+    static real_syscall_fn fn;
+    if (!fn) fn = (real_syscall_fn)dlsym(RTLD_NEXT, "syscall");
+    return fn;
+}
+
+long syscall(long number, ...) {
+    va_list ap;
+    long a[6];
+    va_start(ap, number);
+    for (int i = 0; i < 6; i++) a[i] = va_arg(ap, long);
+    va_end(ap);
+
+    switch (number) {
+    case SYS_setuid:     return setuid((uid_t)a[0]);
+    case SYS_setgid:     return setgid((gid_t)a[0]);
+    case SYS_setreuid:   return setreuid((uid_t)a[0], (uid_t)a[1]);
+    case SYS_setregid:   return setregid((gid_t)a[0], (gid_t)a[1]);
+    case SYS_setresuid:  return setresuid((uid_t)a[0], (uid_t)a[1], (uid_t)a[2]);
+    case SYS_setresgid:  return setresgid((gid_t)a[0], (gid_t)a[1], (gid_t)a[2]);
+    case SYS_setgroups:  return setgroups((size_t)a[0], (const gid_t *)a[1]);
+    case SYS_getgroups:  return getgroups((int)a[0], (gid_t *)a[1]);
+    case SYS_getuid:     return getuid();
+    case SYS_geteuid:    return geteuid();
+    case SYS_getgid:     return getgid();
+    case SYS_getegid:    return getegid();
+    default: {
+        real_syscall_fn real = real_syscall();
+        if (!real) { errno = ENOSYS; return -1; }
+        return real(number, a[0], a[1], a[2], a[3], a[4], a[5]);
+    }
+    }
 }

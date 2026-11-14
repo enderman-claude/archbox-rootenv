@@ -21,7 +21,7 @@ esac
 
 FLAGS="-O2 -Wall -Wextra -Werror"
 
-"$CC" $FLAGS -fPIC -shared -o "$OUT/libfakeroot-credentials.so" src/credentials.c
+"$CC" $FLAGS -fPIC -shared -o "$OUT/libfakeroot-credentials.so" src/credentials.c -ldl
 echo "built $OUT/libfakeroot-credentials.so ($ARCH)"
 
 if [ "$ARCH" = host ]; then

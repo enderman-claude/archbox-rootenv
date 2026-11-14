@@ -8,9 +8,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 static int failures = 0;
+
+/* kernel's own view of the real/effective uid and gid (not interposed: plain file read) */
+static void kernel_ids(uid_t *u, gid_t *g) {
+    *u = 0; *g = 0;
+    FILE *f = fopen("/proc/self/status", "r");
+    char line[256];
+    while (f && fgets(line, sizeof line, f)) {
+        unsigned ru, gg;
+        if (sscanf(line, "Uid: %u", &ru) == 1) *u = ru;
+        if (sscanf(line, "Gid: %u", &gg) == 1) *g = gg;
+    }
+    if (f) fclose(f);
+}
 
 #define CHECK(cond, msg)                                                  \
     do {                                                                  \
@@ -19,8 +33,8 @@ static int failures = 0;
     } while (0)
 
 int main(void) {
-    uid_t kuid = (uid_t)syscall(SYS_getuid);
-    gid_t kgid = (gid_t)syscall(SYS_getgid);
+    uid_t kuid; gid_t kgid;
+    kernel_ids(&kuid, &kgid);
 
     CHECK(getuid() == 0 && geteuid() == 0, "starts as fake root (uid 0)");
     CHECK(getgid() == 0 && getegid() == 0, "starts as fake root (gid 0)");
@@ -51,9 +65,18 @@ int main(void) {
     errno = 0;
     CHECK(setresuid(0, 0, 0) == -1 && errno == EPERM, "unprivileged setresuid to 0 is refused");
 
-    /* the real kernel ids must not have moved */
-    CHECK((uid_t)syscall(SYS_getuid) == kuid, "kernel real uid unchanged by the shim");
-    CHECK((gid_t)syscall(SYS_getgid) == kgid, "kernel real gid unchanged by the shim");
+    /* raw syscall() path: credential numbers are answered in-process too */
+    errno = 0;
+    CHECK(syscall(SYS_setgroups, 1, want) == -1 && errno == EPERM,
+          "raw syscall(SYS_setgroups) is refused when unprivileged");
+    CHECK(syscall(SYS_getuid) == 1000, "raw syscall(SYS_getuid) reports the fake uid");
+    CHECK(syscall(SYS_getpid) == getpid(), "raw syscall(SYS_getpid) passes through to the kernel");
+
+    /* the kernel's real ids must not have moved */
+    uid_t ku; gid_t kg;
+    kernel_ids(&ku, &kg);
+    CHECK(ku == kuid, "kernel real uid unchanged by the shim");
+    CHECK(kg == kgid, "kernel real gid unchanged by the shim");
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
