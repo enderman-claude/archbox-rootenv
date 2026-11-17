@@ -15,7 +15,7 @@ static int failures = 0;
 
 /* kernel's own view of the real/effective uid and gid (not interposed: plain file read) */
 static void kernel_ids(uid_t *u, gid_t *g) {
-    *u = 0; *g = 0;
+    *u = (uid_t)-1; *g = (gid_t)-1;               /* -1 stays if /proc is unreadable: the check then fails */
     FILE *f = fopen("/proc/self/status", "r");
     char line[256];
     while (f && fgets(line, sizeof line, f)) {
@@ -70,6 +70,12 @@ int main(void) {
     CHECK(syscall(SYS_setgroups, 1, want) == -1 && errno == EPERM,
           "raw syscall(SYS_setgroups) is refused when unprivileged");
     CHECK(syscall(SYS_getuid) == 1000, "raw syscall(SYS_getuid) reports the fake uid");
+    uid_t sr = 0, se = 0, ss = 0;
+    CHECK(syscall(SYS_getresuid, &sr, &se, &ss) == 0 && sr == 1000 && se == 1000 && ss == 1000,
+          "raw syscall(SYS_getresuid) reports the fake ids");
+    gid_t sgr = 0, sge = 0, sgs = 0;
+    CHECK(syscall(SYS_getresgid, &sgr, &sge, &sgs) == 0 && sgr == 0 && sge == 0 && sgs == 0,
+          "raw syscall(SYS_getresgid) reports the fake gids");
     CHECK(syscall(SYS_getpid) == getpid(), "raw syscall(SYS_getpid) passes through to the kernel");
 
     /* the kernel's real ids must not have moved */

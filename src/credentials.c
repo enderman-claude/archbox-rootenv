@@ -252,6 +252,8 @@ long syscall(long number, ...) {
     case SYS_geteuid:    return geteuid();
     case SYS_getgid:     return getgid();
     case SYS_getegid:    return getegid();
+    case SYS_getresuid:  return getresuid((uid_t *)a[0], (uid_t *)a[1], (uid_t *)a[2]);
+    case SYS_getresgid:  return getresgid((gid_t *)a[0], (gid_t *)a[1], (gid_t *)a[2]);
     default: {
         real_syscall_fn real = real_syscall();
         if (!real) { errno = ENOSYS; return -1; }
